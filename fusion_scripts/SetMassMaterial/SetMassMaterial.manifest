@@ -1,0 +1,10 @@
+{
+    "autodeskProduct": "Fusion360",
+    "type": "script",
+    "author": "",
+    "description": {
+        "": "Assign material and density to selected bodies, either by material (with adjustable density) or by target total mass."
+    },
+    "supportedOS": "windows|mac",
+    "editEnabled": true
+}

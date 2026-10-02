@@ -1,0 +1,10 @@
+{
+    "autodeskProduct": "Fusion360",
+    "type": "script",
+    "author": "",
+    "description": {
+        "": "Replace selected geometry with an equally sized solid bounding box."
+    },
+    "supportedOS": "windows|mac",
+    "editEnabled": true
+}

@@ -1,0 +1,10 @@
+{
+    "autodeskProduct": "Fusion360",
+    "type": "script",
+    "author": "",
+    "description": {
+        "": "Read-only: body counts and mass for every top-level component, plus unclaimed bodies in the source tree."
+    },
+    "supportedOS": "windows|mac",
+    "editEnabled": true
+}

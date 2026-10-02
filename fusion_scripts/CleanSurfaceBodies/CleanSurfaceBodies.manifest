@@ -1,0 +1,10 @@
+{
+    "autodeskProduct": "Fusion360",
+    "type": "script",
+    "author": "",
+    "description": {
+        "": "Report / hide / delete non-solid (surface) bodies left over from IGES-STEP import."
+    },
+    "supportedOS": "windows|mac",
+    "editEnabled": true
+}

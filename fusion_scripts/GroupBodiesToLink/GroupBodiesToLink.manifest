@@ -1,0 +1,10 @@
+{
+    "autodeskProduct": "Fusion360",
+    "type": "script",
+    "author": "",
+    "description": {
+        "": "Create a new top-level component (URDF link) and move the selected bodies into it."
+    },
+    "supportedOS": "windows|mac",
+    "editEnabled": true
+}

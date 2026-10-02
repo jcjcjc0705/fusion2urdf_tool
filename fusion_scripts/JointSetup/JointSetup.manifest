@@ -1,0 +1,10 @@
+{
+    "autodeskProduct": "Fusion360",
+    "type": "script",
+    "author": "",
+    "description": {
+        "": "One-stop joint setup: free limits, pose, rebuild zero, reverse axis, set limits."
+    },
+    "supportedOS": "windows|mac",
+    "editEnabled": true
+}
