@@ -1,0 +1,94 @@
+# URDF Joint Reverse
+
+An interactive Python command-line tool for reversing joint directions in a URDF file.
+
+The tool updates a selected joint in place by reversing its axis vector. For `revolute` and `prismatic` joints, it also swaps and negates complete lower/upper limits when both are present. If the joint has a `mimic` element, its multiplier is negated so the mimic relationship stays consistent with the reversed direction.
+
+## Features
+
+- Lists all joints in a URDF file with their type and axis.
+- Lets you choose a joint by index or name.
+- Supports `revolute`, `continuous`, and `prismatic` joints.
+- Reverses the joint `<axis xyz="...">` value.
+- Updates `<limit lower="..." upper="...">` for `revolute` and `prismatic` joints.
+- Updates `<mimic multiplier="...">` when present.
+- Saves changes back to the original URDF file after each successful edit.
+
+## Requirements
+
+- Python 3.9 or newer
+- No external Python packages are required
+
+## Usage
+
+Run the tool with the path to a URDF file:
+
+```bash
+python main.py path/to/robot.urdf
+```
+
+For the included sample file:
+
+```bash
+python main.py sample.urdf
+```
+
+The program will show the available joints:
+
+```text
+Available joints:
+  [1] joint1  type=revolute  axis=0 1 0
+  [2] joint2  type=prismatic  axis=1 0 0
+```
+
+Enter either a joint index or a joint name, then press Enter. Type `q` to quit.
+
+## What Gets Changed
+
+When a supported joint is selected, the tool changes:
+
+```xml
+<axis xyz="0 1 0" />
+```
+
+to:
+
+```xml
+<axis xyz="0 -1 0" />
+```
+
+For `revolute` and `prismatic` joints with both `lower` and `upper` limits, the values are swapped and negated:
+
+```xml
+<limit lower="-1.57" upper="0.5" />
+```
+
+becomes:
+
+```xml
+<limit lower="-0.5" upper="1.57" />
+```
+
+For mimic joints, the multiplier is negated:
+
+```xml
+<mimic joint="joint1" multiplier="1" />
+```
+
+becomes:
+
+```xml
+<mimic joint="joint1" multiplier="-1" />
+```
+
+## Notes
+
+- The input URDF file is modified in place. Make a backup or use version control before editing important robot descriptions.
+- If a supported joint does not have an `<axis>` element, the tool creates one with the default URDF axis `1 0 0` and then reverses it.
+- Fixed and other unsupported joint types are listed, but they are not modified.
+- The tool uses Python's standard XML library, so formatting may be normalized when the file is saved.
+
+## Project Files
+
+- `main.py` - the command-line tool
+- `sample.urdf` - a small example URDF for testing
