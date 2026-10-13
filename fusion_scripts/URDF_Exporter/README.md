@@ -1,13 +1,15 @@
 # URDF_Exporter
 
-Fusion 設計 → URDF。本專案使用的版本。
+Fusion 設計 → URDF。這是 fusion2urdf 的修改版，負責整套流程裡的匯出步驟；
+完整流程見 [repo 根目錄的 README](../../README.md)。
 
 ## 安裝
 
-Fusion 裡 `Shift+S` → Scripts 分頁 → 綠色 `+`，參照到：
+Fusion 裡 UTILITIES → ADD-INS → Scripts and Add-Ins（`Shift+S`）→ `+` →
+Script or add-in from device，選這個資料夾：
 
 ```
-step2urdf/fusion_scripts/URDF_Exporter/URDF_Exporter.py
+fusion_scripts/URDF_Exporter/
 ```
 
 ## 匯出前的必要條件
@@ -69,8 +71,8 @@ revolute 與 prismatic 各一處。
 limit.attrib = {'upper': ..., 'lower': ..., 'effort': '100', 'velocity': '100'}
 ```
 
-沒有在這裡改，是因為合理值依致動器而異。本專案用匯出後處理：
-`step2urdf/urdf_set_effort/`。
+沒有在這裡改，是因為合理值依致動器而異。匯出後用 repo 根目錄的
+[`urdf_set_effort/`](../../urdf_set_effort/) 改成實際值。
 
 ## 授權與出處
 

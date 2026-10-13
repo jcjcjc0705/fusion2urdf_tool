@@ -216,15 +216,17 @@ JointSetup 把這些事做成批次。它只處理 Revolute joint，Slider 的�
 
 ### JOINTS 表
 
-`JointSetup.py` 開頭的 `JOINTS`，每一列是一個 joint。腳本裡附的表是範例，請整個換成你的 joint：
+`JointSetup.py` 開頭的 `JOINTS`，每一列是一個 joint。
+
+腳本裡附的表是一台實際機器人的設定，當作範例：它有四條末端是輪子的腿，和兩隻末端是夾爪的手臂。使用時請整個換成你的 joint。下面節錄其中四列：
 
 ```python
 JOINTS = [
-    # 名稱          零位角   limit (下, 上)   反轉軸向   驅動到
-    ('hip_left',       0,    (-45,   45),    False,      0),
-    ('knee_left',     45,    (-110, 110),    False,     45),
-    ('knee_right',   -45,    (-110, 110),    True,     -45),
-    ('wheel_left',     0,    None,           False,      0),
+    # 名稱             零位角   limit (下, 上)   反轉軸向   驅動到
+    ('base_leg_rf',       0,    (-45,   45),    False,      0),   # 髖關節，接在 base_link 上
+    ('leg_rf1_rf2',      45,    (-110, 110),    False,     45),   # 零位角不是 0
+    ('leg_lr1_lr2',     -45,    (-110, 110),    True,     -45),   # 旋轉軸跟其他三條腿相反
+    ('leg_rf_wheel',      0,    None,           False,      0),   # 輪子，不設限
 ]
 ```
 
@@ -238,7 +240,7 @@ JOINTS = [
 
 角度的單位都是度。
 
-Fusion 介面顯示的上下限是「零位角 + limit」，看起來不對稱是正常的。例如零位角 45、limit −110 到 110，Fusion 顯示 −65 到 155，URDF 寫入 −110 到 110。
+Fusion 介面顯示的上下限是「零位角 + limit」，看起來不對稱是正常的。以上表的 `leg_rf1_rf2` 為例：零位角 45、limit −110 到 110，Fusion 顯示 −65 到 155，URDF 寫入 −110 到 110。
 
 Fusion 不允許在 joint 建立後反轉軸向，所以「反轉軸向」只是記號。JointSetup 會列出這些 joint，匯出後再用 `urdf_joint_reverse` 處理，見第 8 步。
 
@@ -267,6 +269,8 @@ Fusion 不允許在 joint 建立後反轉軸向，所以「反轉軸向」只是
 2. 只開 `DO_POSE` 和 `DO_DUMP_POSE`，執行，選擇存檔位置。
 
 輸出的角度已經換算成 URDF 的角度：現在角減掉零位角，標記反轉的再變號。所以零位角和反轉軸向在這一步就必須是對的。
+
+腳本裡第二張被註解掉的表，是範例機器人輸出站立姿勢時用的設定，可以對照著看：跟第一張只差在「驅動到」。
 
 ### 匯出前
 
