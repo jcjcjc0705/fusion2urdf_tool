@@ -1,225 +1,274 @@
 # -*- coding: utf-8 -*-
 """
-URDF Set Effort / Velocity
-==========================
-fusion2urdf 把每個 joint 的 effort 和 velocity 寫死成 100
-（Joint.py 的 make_joint_xml）。100 N·m 對一般致動器是天文數字，
-在 Isaac Sim 裡等於給了無限扭矩，模擬結果不能反映真實能力。
+URDF Set Effort / Velocity（互動式）
+==================================
+fusion2urdf 把每個 joint 的 effort 和 velocity 寫死成 100，這個工具讓你逐一改成真實值。
+操作方式跟 urdf_joint_reverse 一樣：列出所有關節和目前的 effort / velocity，
+選一個（或多個）關節、輸入新值，馬上存回原檔再重新列出，直到輸入 q 離開。
 
-這個工具依下面的表逐一改寫。用正規表示式就地替換，不經過 XML 解析，
-所以排版、註解、屬性順序都不會被動到 —— diff 只會顯示真正改動的行。
+用正規表示式就地替換，不經過 XML 函式庫重寫，所以排版、註解、屬性順序都不會被動到，
+.xacro 也能用（xacro 命名空間不會被弄壞）。transmission 裡的同名 <joint> 不會被當成關節。
 
-continuous joint（輪子）原本沒有 <limit> 元素，本工具會補上一個
-只含 effort / velocity 的 limit（URDF 規格允許 continuous 省略 lower/upper）。
+continuous joint（輪子）原本沒有 <limit>，會補一個只含 effort / velocity 的
+（URDF 規格允許 continuous 省略 lower / upper）。
 
 用法
 ----
     python main.py path/to/robot.urdf
 
-會先寫一份 <檔名>.bak 再就地修改。
-
 單位
 ----
-    effort   : N·m（旋轉關節）
-    velocity : rad/s
+    revolute / continuous：effort N·m、velocity rad/s
+    prismatic           ：effort N、  velocity m/s
 """
 
-import os
+import argparse
 import re
-import shutil
 import sys
+from pathlib import Path
 
-# ----------------------------------------------------------------- 設定
-# 名稱: (effort N·m, velocity rad/s)
-#   None = 跳過不改，保留原值（用於規格還沒確認的關節）
-#
-# 已確認：DM-J10010-2EC 額定 50 N·m
-#   直驅      effort = 50
-#   1:3 皮帶  effort = 50 × 3 × 0.97 ≈ 145
-#
-# ⚠️ 下面標 TODO 的是還沒拿到規格的，目前設 None 會保留 100。
-#    拿到數字填進去重跑即可。
-DM_DIRECT = 50.0
-DM_BELT = 145.0
-DM_VEL = None          # TODO: DM-J10010-2EC 最高角速度 (rad/s)
-DM_BELT_VEL = None     # TODO: 上面那個除以 3
-MG_EFFORT = None       # TODO: MG4010E-i10 額定扭矩 (N·m)
-MG_VEL = None          # TODO: MG4010E-i10 最高角速度 (rad/s)
-WHEEL_EFFORT = None    # TODO: 4 吋輪轂電機額定扭矩 (N·m)
-WHEEL_VEL = None       # TODO: 4 吋輪轂電機最高角速度 (rad/s)
+EDITABLE_TYPES = {'revolute', 'continuous', 'prismatic'}
 
-# 兩個都是 None 時，才依上面的 JOINTS 表逐一設定。
-# 填數字的話，URDF 裡每個 joint 都套用這個值（忽略表格）——
-# 用於初期驗證：先讓扭矩和速度不要成為限制因素，單純確認結構、
-# 質量、運動鏈是否正確。規格確認後改回 None 即可。
-OVERRIDE_EFFORT = 1000.0      # N.m，None = 用表格
-OVERRIDE_VELOCITY = 1000.0    # rad/s，None = 用表格
-
-JOINTS = {
-    # ---- 髖橫向 / 肩橫向（直驅 DM-J10010）
-    'base_leg_rf':        (DM_DIRECT, DM_VEL),
-    'base_leg_rr':        (DM_DIRECT, DM_VEL),
-    'base_leg_lf':        (DM_DIRECT, DM_VEL),
-    'base_leg_lr':        (DM_DIRECT, DM_VEL),
-    'base_hand_r':        (DM_DIRECT, DM_VEL),
-    'base_hand_l':        (DM_DIRECT, DM_VEL),
-
-    # ---- 髖上下（直驅 DM-J10010）
-    'leg_rf1_rf2':        (DM_DIRECT, DM_VEL),
-    'leg_rr1_rr2':        (DM_DIRECT, DM_VEL),
-    'leg_lf1_lf2':        (DM_DIRECT, DM_VEL),
-    'leg_lr1_lr2':        (DM_DIRECT, DM_VEL),
-
-    # ---- 膝（DM-J10010 + 1:3 皮帶）
-    'leg_rf2_rf3':        (DM_BELT, DM_BELT_VEL),
-    'leg_rr2_rr3':        (DM_BELT, DM_BELT_VEL),
-    'leg_lf2_lf3':        (DM_BELT, DM_BELT_VEL),
-    'leg_lr2_lr3':        (DM_BELT, DM_BELT_VEL),
-
-    # ---- 肩上下（直驅 DM-J10010）
-    'hand_r1_r2':         (DM_DIRECT, DM_VEL),
-    'hand_l1_l2':         (DM_DIRECT, DM_VEL),
-
-    # ---- 肘（DM-J10010 + 1:3 皮帶）
-    'hand_r2_r3':         (DM_BELT, DM_BELT_VEL),
-    'hand_l2_l3':         (DM_BELT, DM_BELT_VEL),
-
-    # ---- 腕 pitch / roll（MG4010E-i10）
-    'hand_r3_gripper_r1': (MG_EFFORT, MG_VEL),
-    'hand_l3_gripper_l1': (MG_EFFORT, MG_VEL),
-    'gripper_r1_r2':      (MG_EFFORT, MG_VEL),
-    'gripper_l1_l2':      (MG_EFFORT, MG_VEL),
-
-    # ---- 輪（4 吋輪轂電機，continuous）
-    'leg_rf_wheel':       (WHEEL_EFFORT, WHEEL_VEL),
-    'leg_rr_wheel':       (WHEEL_EFFORT, WHEEL_VEL),
-    'leg_lf_wheel':       (WHEEL_EFFORT, WHEEL_VEL),
-    'leg_lr_wheel':       (WHEEL_EFFORT, WHEEL_VEL),
-}
+# 只抓開頭標籤有 type 的 <joint>，避開 transmission 裡的 <joint name="...">
+JOINT_RE = re.compile(r'<joint\b(?=[^>]*\btype=)[^>]*>.*?</joint>', re.S)
+LIMIT_RE = re.compile(r'<limit\b[^>]*/>')
+AXIS_RE = re.compile(r'([ \t]*)<axis\b[^>]*/>')
 
 
-# ----------------------------------------------------------------- 實作
-def _fmt(v):
-    """數字轉字串，整數不要拖小數點。"""
-    return str(int(v)) if float(v).is_integer() else repr(float(v))
+def get_attr(tag, key):
+    m = re.search(r'\b%s="([^"]*)"' % key, tag)
+    return m.group(1) if m else None
 
 
-def _patch_block(block, effort, velocity):
-    """改寫單一 <joint>…</joint> 區塊，回傳 (新區塊, 說明)。"""
-    m = re.search(r'<limit\b[^>]*/>', block)
+def set_attr(tag, key, value):
+    """改一個屬性；沒有的話加在 /> 前面（保留原本 /> 前有沒有空白的寫法）。"""
+    if get_attr(tag, key) is not None:
+        return re.sub(r'\b%s="[^"]*"' % key, '%s="%s"' % (key, value), tag)
+    body = tag[:-2]
+    trailing = ' ' if body != body.rstrip() else ''
+    return '%s %s="%s"%s/>' % (body.rstrip(), key, value, trailing)
 
-    if m:
-        limit = m.group(0)
-        new = limit
+
+def fmt(value):
+    """數字轉字串：整數不要拖小數點，其餘最多 4 位小數。"""
+    v = round(float(value), 4)
+    return str(int(v)) if v.is_integer() else repr(v)
+
+
+def scan_joints(text):
+    """回傳 [{name, type, start, end, effort, velocity}]，依檔案順序。"""
+    joints = []
+    for index, m in enumerate(JOINT_RE.finditer(text), start=1):
+        head = text[m.start():text.index('>', m.start()) + 1]
+        limit = LIMIT_RE.search(m.group(0))
+        joints.append(dict(
+            name=get_attr(head, 'name') or '<unnamed_%d>' % index,
+            type=get_attr(head, 'type') or '',
+            start=m.start(), end=m.end(),
+            effort=get_attr(limit.group(0), 'effort') if limit else None,
+            velocity=get_attr(limit.group(0), 'velocity') if limit else None))
+    return joints
+
+
+def apply_values(text, joint, effort, velocity):
+    """把一個關節的 effort / velocity 改掉（None = 不改），回傳新的整份文字。"""
+    block = text[joint['start']:joint['end']]
+    limit = LIMIT_RE.search(block)
+    if limit:
+        tag = limit.group(0)
         if effort is not None:
-            new = re.sub(r'effort="[^"]*"', 'effort="%s"' % _fmt(effort), new)
+            tag = set_attr(tag, 'effort', fmt(effort))
         if velocity is not None:
-            new = re.sub(r'velocity="[^"]*"', 'velocity="%s"' % _fmt(velocity),
-                         new)
-        if new == limit:
-            return block, 'unchanged'
-        return block.replace(limit, new), 'limit updated'
-
-    # continuous joint：沒有 <limit>，補一個只含 effort / velocity 的
-    if effort is None and velocity is None:
-        return block, 'no limit element, nothing to add'
-
-    attrs = []
-    if effort is not None:
-        attrs.append('effort="%s"' % _fmt(effort))
-    if velocity is not None:
-        attrs.append('velocity="%s"' % _fmt(velocity))
-
-    axis = re.search(r'([ \t]*)<axis\b[^>]*/>', block)
-    indent = axis.group(1) if axis else '    '
-    inserted = '\n%s<limit %s/>' % (indent, ' '.join(attrs))
-
-    anchor = axis.group(0) if axis else None
-    if anchor:
-        return block.replace(anchor, anchor + inserted), 'limit inserted'
-    return block.replace('</joint>', inserted.lstrip('\n') + '\n</joint>'), \
-        'limit inserted'
+            tag = set_attr(tag, 'velocity', fmt(velocity))
+        block = block[:limit.start()] + tag + block[limit.end():]
+    else:
+        # 沒有 <limit>（continuous）：補一個，effort / velocity 沒給的先不寫
+        attrs = []
+        if effort is not None:
+            attrs.append('effort="%s"' % fmt(effort))
+        if velocity is not None:
+            attrs.append('velocity="%s"' % fmt(velocity))
+        axis = AXIS_RE.search(block)
+        indent = axis.group(1) if axis else '    '
+        close = ' />' if axis and axis.group(0).endswith(' />') else '/>'   # 跟著 <axis> 的寫法
+        new_tag = '<limit %s%s' % (' '.join(attrs), close)
+        if axis:
+            block = block[:axis.end()] + '\n' + indent + new_tag + block[axis.end():]
+        else:
+            close = block.rfind('</joint>')
+            block = block[:close] + indent + new_tag + '\n' + block[close:]
+    return text[:joint['start']] + block + text[joint['end']:]
 
 
-def main(path):
-    if not os.path.isfile(path):
-        print('找不到檔案: %s' % path)
+def units(joint_type):
+    return ('N', 'm/s') if joint_type == 'prismatic' else ('N·m', 'rad/s')
+
+
+def list_joints(joints):
+    print('\nAvailable joints:')
+    width = max(len(j['name']) for j in joints)
+    for index, j in enumerate(joints, start=1):
+        if j['type'] in EDITABLE_TYPES:
+            eu, vu = units(j['type'])
+            effort = '%s %s' % (j['effort'], eu) if j['effort'] is not None else '-'
+            velocity = '%s %s' % (j['velocity'], vu) if j['velocity'] is not None else '-'
+            print('  [%2d] %-*s  type=%-10s  effort=%-12s  velocity=%s'
+                  % (index, width, j['name'], j['type'], effort, velocity))
+        else:
+            print('  [%2d] %-*s  type=%-10s  (no effort/velocity)' % (index, width, j['name'], j['type']))
+
+
+def select_joints(selection, joints):
+    """'3'、'base_leg_rf'、'1,3,5'、'7-12'、'all' → 關節 list；有錯回傳 (None, 錯誤訊息)。"""
+    if selection.lower() == 'all':
+        return joints, None
+    picked = []
+    for token in re.split(r'[,\s]+', selection):
+        if not token:
+            continue
+        m = re.fullmatch(r'(\d+)-(\d+)', token)
+        if m:
+            a, b = int(m.group(1)), int(m.group(2))
+            if not (1 <= a <= b <= len(joints)):
+                return None, 'Range out of bounds: %s' % token
+            picked += joints[a - 1:b]
+        elif token.isdigit():
+            i = int(token)
+            if not 1 <= i <= len(joints):
+                return None, 'Index out of bounds: %s' % token
+            picked.append(joints[i - 1])
+        else:
+            match = [j for j in joints if j['name'] == token]
+            if not match:
+                return None, 'Joint not found: %s' % token
+            picked += match
+    seen, out = set(), []
+    for j in picked:
+        if j['name'] not in seen:
+            seen.add(j['name'])
+            out.append(j)
+    return out, None
+
+
+def ask_value(label, unit, current, required):
+    """回傳新值、None（不改）或 'cancel'。required：有關節還沒有這個值，不能留空。"""
+    if required:
+        hint = 'required'
+    else:
+        hint = 'Enter = keep %s' % (current if current is not None else 'current')
+    while True:
+        raw = input('  New %s [%s] (%s, q = cancel): ' % (label, unit, hint)).strip()
+        if raw == '':
+            if required:
+                print('  Required: URDF <limit> needs both effort and velocity, '
+                      'and some selected joints have no %s yet.' % label)
+                continue
+            return None
+        if raw.lower() == 'q':
+            return 'cancel'
+        try:
+            value = float(raw)
+        except ValueError:
+            print('  Not a number: %s' % raw)
+            continue
+        if value <= 0:
+            print('  Must be greater than 0.')
+            continue
+        return value
+
+
+def interactive_edit(path):
+    text = path.read_text(encoding='utf-8')
+    if not scan_joints(text):
+        print('No <joint> elements found.')
         return 1
 
-    with open(path, 'r', encoding='utf-8') as f:
-        text = f.read()
+    print('Loaded: %s' % path)
+    print('Select a joint by index or name (several: 1,3,5 or 7-12 or all), '
+          'then enter new values. Type q to quit.')
 
-    # 只抓有 type 屬性的 joint，避開 transmission 裡同名的 <joint>。
-    # 不依賴 name / type 的先後順序 —— 其他工具用 XML 庫重寫後順序可能會變。
-    pattern = re.compile(
-        r'<joint\b(?=[^>]*\btype=)[^>]*\bname="([^"]+)"[^>]*>.*?</joint>', re.S)
+    while True:
+        joints = scan_joints(text)
+        list_joints(joints)
+        selection = input('\nSelect joint index/name, or q to quit: ').strip()
 
-    seen = []
-    changed = []
-    skipped = []
-    unknown = []
+        if selection.lower() == 'q':
+            print('Bye.')
+            return 0
+        if not selection:
+            print('Please enter a joint index or name.')
+            continue
 
-    override = OVERRIDE_EFFORT is not None or OVERRIDE_VELOCITY is not None
+        picked, error = select_joints(selection, joints)
+        if error:
+            print(error)
+            continue
+        skipped = [j['name'] for j in picked if j['type'] not in EDITABLE_TYPES]
+        picked = [j for j in picked if j['type'] in EDITABLE_TYPES]
+        if skipped:
+            print('Skipped (no effort/velocity for this joint type): %s' % ', '.join(skipped))
+        if not picked:
+            continue
 
-    def repl(m):
-        name = m.group(1)
-        seen.append(name)
-        if override:
-            effort, velocity = OVERRIDE_EFFORT, OVERRIDE_VELOCITY
+        if len(picked) == 1:
+            j = picked[0]
+            print('\n%s  type=%s  effort=%s  velocity=%s'
+                  % (j['name'], j['type'], j['effort'] or '-', j['velocity'] or '-'))
+            cur_e, cur_v = j['effort'], j['velocity']
         else:
-            if name not in JOINTS:
-                unknown.append(name)
-                return m.group(0)
-            effort, velocity = JOINTS[name]
+            print('\n%d joints selected: %s' % (len(picked), ', '.join(j['name'] for j in picked)))
+            cur_e = cur_v = None
+        unit_set = {units(j['type']) for j in picked}
+        eu, vu = unit_set.pop() if len(unit_set) == 1 else ('N·m or N', 'rad/s or m/s')
+
+        effort = ask_value('effort', eu, cur_e, any(j['effort'] is None for j in picked))
+        if effort == 'cancel':
+            print('Cancelled.')
+            continue
+        velocity = ask_value('velocity', vu, cur_v, any(j['velocity'] is None for j in picked))
+        if velocity == 'cancel':
+            print('Cancelled.')
+            continue
         if effort is None and velocity is None:
-            skipped.append(name)
-            return m.group(0)
-        block, how = _patch_block(m.group(0), effort, velocity)
-        changed.append((name, effort, velocity, how))
-        return block
+            print('No change.')
+            continue
 
-    out = pattern.sub(repl, text)
+        # 一個一個改；每改一個都重新掃描，位置才不會跑掉
+        for name in [j['name'] for j in picked]:
+            joint = next(j for j in scan_joints(text) if j['name'] == name)
+            text = apply_values(text, joint, effort, velocity)
+        path.write_text(text, encoding='utf-8')
 
-    if out == text:
-        print('沒有任何改動。')
-    else:
-        shutil.copyfile(path, path + '.bak')
-        with open(path, 'w', encoding='utf-8') as f:
-            f.write(out)
+        changes = []
+        if effort is not None:
+            changes.append('effort=%s' % fmt(effort))
+        if velocity is not None:
+            changes.append('velocity=%s' % fmt(velocity))
+        print('%s -> %s. Changes saved back to the original file.'
+              % (', '.join(j['name'] for j in picked), ', '.join(changes)))
 
-    if override:
-        print('[OVERRIDE] 全部 joint 套用 effort=%s velocity=%s，忽略 JOINTS 表'
-              % (OVERRIDE_EFFORT, OVERRIDE_VELOCITY))
-    print('URDF 裡的 joint: %d 個' % len(seen))
-    print('已更新: %d 個' % len(changed))
-    for name, e, v, how in changed:
-        print('  %-22s effort=%-6s velocity=%-6s  (%s)' % (
-            name,
-            _fmt(e) if e is not None else '不變',
-            _fmt(v) if v is not None else '不變',
-            how))
 
-    if skipped:
-        print('\n跳過（規格未確認，保留原值）: %d 個' % len(skipped))
-        for n in skipped:
-            print('  %s' % n)
-    if unknown:
-        print('\n[!] URDF 裡有、表裡沒有: %d 個' % len(unknown))
-        for n in unknown:
-            print('  %s' % n)
-    missing = [n for n in JOINTS if n not in seen]
-    if missing:
-        print('\n[!] 表裡有、URDF 裡沒有: %d 個' % len(missing))
-        for n in missing:
-            print('  %s' % n)
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description='Interactively set URDF joint effort / velocity limits in place.')
+    parser.add_argument('urdf_path', help='Path to the target URDF (or xacro) file')
+    return parser.parse_args()
 
-    if out != text:
-        print('\n備份: %s.bak' % path)
-    return 0
+
+def main():
+    args = parse_args()
+    target_path = Path(args.urdf_path).expanduser()
+    if not target_path.exists():
+        print('File not found: %s' % target_path)
+        return 1
+    if target_path.suffix.lower() not in ('.urdf', '.xacro'):
+        print('Warning: target suffix is not .urdf/.xacro, but processing will continue: %s' % target_path)
+    try:
+        return interactive_edit(target_path)
+    except (KeyboardInterrupt, EOFError):
+        print('\nBye.')
+        return 0
 
 
 if __name__ == '__main__':
-    if len(sys.argv) != 2:
-        print('用法: python main.py path/to/robot.urdf')
-        sys.exit(2)
-    sys.exit(main(sys.argv[1]))
+    sys.exit(main())

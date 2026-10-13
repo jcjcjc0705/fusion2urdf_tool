@@ -246,14 +246,14 @@ for name, deg in JOINT_POS_DEG.items():
     except Exception as e:
         errors.append('%s drive: %s' % (name, e))
 
-print('[{pose_name}] joint 表 %d 個，stage 找到 %d 個'
+print('[{pose_name}] %d joints in table, %d found in stage'
       % (len(JOINT_POS_DEG), len(found)))
-print('  關節狀態設定 %d 個、drive 目標設定 %d 個' % (ok_state, ok_drive))
+print('  joint state set: %d, drive target set: %d' % (ok_state, ok_drive))
 if missing:
-    print('  stage 裡找不到 %d 個: %s' % (len(missing), ', '.join(missing)))
-    print('  -> 確認 URDF 已匯入，而且 joint 名稱沒有被改過')
+    print('  not found in stage (%d): %s' % (len(missing), ', '.join(missing)))
+    print('  -> make sure the URDF is imported and joint names are unchanged')
 for e in errors[:10]:
-    print('  錯誤: %s' % e)
+    print('  error: %s' % e)
 '''
 
 
